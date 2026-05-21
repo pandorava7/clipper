@@ -1,26 +1,58 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f5eedf;
+  --foreground: #16120d;
+  --surface: rgba(255, 252, 246, 0.88);
+  --surface-strong: #fffaf1;
+  --border: rgba(22, 18, 13, 0.12);
+  --muted: rgba(22, 18, 13, 0.64);
+  --accent: #16120d;
+  --accent-soft: #ede4d3;
+  --danger: #a54f3d;
+  --success: #1f6d3b;
+  --shadow: 0 20px 80px rgba(76, 58, 33, 0.14);
+  --radius-shell: 2rem;
+  --radius-panel: 1.5rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.8), transparent 34%),
+    linear-gradient(180deg, #f9f3e8 0%, #f1e7d6 100%);
 }
 
 body {
+  margin: 0;
+  min-height: 100dvh;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: rgba(22, 18, 13, 0.14);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img {
+  -webkit-user-drag: none;
 }
