@@ -44,6 +44,10 @@
   cursor: grabbing;
 }
 
+.cropBoxStatic {
+  cursor: default;
+}
+
 .cropOutline,
 .cropGlow,
 .cropShade {
@@ -221,10 +225,39 @@
   gap: 0.4rem;
 }
 
+.helperCard {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(22, 18, 13, 0.08);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+.helperTitle,
+.helperDescription,
+.archiveBadge,
 .resultTitle,
 .resultDescription,
 .errorText {
   margin: 0;
+}
+
+.helperTitle {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.helperDescription {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .resultTitle {
@@ -241,4 +274,14 @@
 .errorText {
   font-size: 0.9rem;
   color: var(--danger);
+}
+
+.archiveBadge {
+  min-width: 4rem;
+  padding: 0.85rem 1rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-soft);
+  font-size: 1.35rem;
+  font-weight: 700;
 }

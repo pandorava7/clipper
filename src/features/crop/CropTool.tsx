@@ -1,5 +1,6 @@
 "use client";
 
+import JSZip from "jszip";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,8 +11,9 @@ import {
   blobFromCanvas,
   clamp,
   downloadUrl,
-  loadImageFile,
+  loadImageFiles,
   replaceFileExtension,
+  revokeLoadedImages,
   revokeObjectUrl,
   type LoadedImageFile,
 } from "@/src/lib/image-tools";
@@ -33,6 +35,12 @@ type ImageFrame = {
 };
 
 type ResizeHandle = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
+type BatchArchive = {
+  url: string;
+  name: string;
+  count: number;
+};
+
 type Interaction =
   | {
       type: "move";
@@ -103,6 +111,28 @@ function createInitialCrop(frame: ImageFrame, aspect?: number): CropRect {
     y: (frame.height - height) / 2,
     width,
     height,
+  };
+}
+
+function createCenteredAspectCrop(width: number, height: number, aspect: number): CropRect {
+  const sourceAspect = width / height;
+
+  if (sourceAspect > aspect) {
+    const cropWidth = height * aspect;
+    return {
+      x: (width - cropWidth) / 2,
+      y: 0,
+      width: cropWidth,
+      height,
+    };
+  }
+
+  const cropHeight = width / aspect;
+  return {
+    x: 0,
+    y: (height - cropHeight) / 2,
+    width,
+    height: cropHeight,
   };
 }
 
@@ -244,13 +274,57 @@ function resizeCrop(crop: CropRect, handle: ResizeHandle, dx: number, dy: number
   return aspect ? resizeAspectCrop(crop, handle, dx, dy, frame, aspect) : resizeFreeCrop(crop, handle, dx, dy, frame);
 }
 
+function createArchiveName(prefix: string) {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+  return `${prefix}-${stamp}.zip`;
+}
+
+async function loadCanvasSource(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load image."));
+    image.src = url;
+  });
+}
+
+async function cropImageToBlob(image: LoadedImageFile, sourceCrop: CropRect) {
+  const source = await loadCanvasSource(image.url);
+  const canvas = document.createElement("canvas");
+
+  canvas.width = Math.max(1, Math.round(sourceCrop.width));
+  canvas.height = Math.max(1, Math.round(sourceCrop.height));
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas unavailable.");
+  }
+
+  context.drawImage(
+    source,
+    sourceCrop.x,
+    sourceCrop.y,
+    sourceCrop.width,
+    sourceCrop.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+
+  return {
+    blob: await blobFromCanvas(canvas, "image/png"),
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
 export function CropTool() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const sourceUrlRef = useRef<string | null>(null);
   const interactionRef = useRef<Interaction | null>(null);
 
-  const [image, setImage] = useState<LoadedImageFile | null>(null);
+  const [images, setImages] = useState<LoadedImageFile[]>([]);
   const [frame, setFrame] = useState<ImageFrame | null>(null);
   const [crop, setCrop] = useState<CropRect | null>(null);
   const [ratioId, setRatioId] = useState("free");
@@ -258,23 +332,45 @@ export function CropTool() {
   const [isExporting, setIsExporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [archive, setArchive] = useState<BatchArchive | null>(null);
   const [resultSize, setResultSize] = useState<{ width: number; height: number } | null>(null);
   const [resultName, setResultName] = useState("cropped-image.png");
+
+  const image = images[0] ?? null;
+  const isBatch = images.length > 1;
 
   const selectedAspect = useMemo(
     () => ratioOptions.find((option) => option.id === ratioId)?.value,
     [ratioId],
   );
 
-  useEffect(() => {
-    return () => {
-      revokeObjectUrl(sourceUrlRef.current);
-      revokeObjectUrl(resultUrl);
-    };
-  }, [resultUrl]);
+  const visibleRatioOptions = useMemo(
+    () => (isBatch ? ratioOptions.filter((option) => option.value) : ratioOptions),
+    [isBatch],
+  );
+
+  const displayCrop = useMemo(() => {
+    if (!frame) {
+      return null;
+    }
+
+    if (isBatch) {
+      return selectedAspect ? createCenteredAspectCrop(frame.width, frame.height, selectedAspect) : null;
+    }
+
+    return crop;
+  }, [crop, frame, isBatch, selectedAspect]);
 
   useEffect(() => {
-    if (!frame) {
+    return () => {
+      revokeLoadedImages(images);
+      revokeObjectUrl(resultUrl);
+      revokeObjectUrl(archive?.url);
+    };
+  }, [archive?.url, images, resultUrl]);
+
+  useEffect(() => {
+    if (!frame || isBatch) {
       return;
     }
 
@@ -334,7 +430,7 @@ export function CropTool() {
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
     };
-  }, [frame, selectedAspect]);
+  }, [frame, isBatch, selectedAspect]);
 
   useEffect(() => {
     function syncImageFrame() {
@@ -352,6 +448,10 @@ export function CropTool() {
       };
 
       setFrame((previousFrame) => {
+        if (isBatch) {
+          return nextFrame;
+        }
+
         if (!previousFrame || previousFrame.width === 0 || previousFrame.height === 0) {
           setCrop((currentCrop) => currentCrop ?? createInitialCrop(nextFrame, selectedAspect));
           return nextFrame;
@@ -379,45 +479,48 @@ export function CropTool() {
     syncImageFrame();
     window.addEventListener("resize", syncImageFrame);
     return () => window.removeEventListener("resize", syncImageFrame);
-  }, [image, selectedAspect]);
+  }, [image, isBatch, selectedAspect]);
 
   async function handleFileSelect(fileList: FileList | null) {
-    const file = fileList?.[0];
-
-    if (!file) {
+    if (!fileList?.length) {
       return;
     }
 
-    if (!file.type.startsWith("image/")) {
+    const files = Array.from(fileList);
+
+    if (files.some((file) => !file.type.startsWith("image/"))) {
       setErrorMessage("请上传图片文件。");
       return;
     }
 
     try {
-      const nextImage = await loadImageFile(file);
-      revokeObjectUrl(sourceUrlRef.current);
-      sourceUrlRef.current = nextImage.url;
+      const nextImages = await loadImageFiles(files);
+      revokeLoadedImages(images);
       revokeObjectUrl(resultUrl);
-      setImage(nextImage);
+      revokeObjectUrl(archive?.url);
+      setImages(nextImages);
       setFrame(null);
       setCrop(null);
       setResultUrl(null);
+      setArchive(null);
       setResultSize(null);
       setErrorMessage(null);
-      setResultName(replaceFileExtension(file.name, "-cropped.png"));
+      setResultName(replaceFileExtension(files[0].name, "-cropped.png"));
+      setRatioId(nextImages.length > 1 ? "1:1" : "free");
     } catch {
       setErrorMessage("图片读取失败，请换一张再试。");
     }
   }
 
   function resetAll() {
-    revokeObjectUrl(sourceUrlRef.current);
-    sourceUrlRef.current = null;
+    revokeLoadedImages(images);
     revokeObjectUrl(resultUrl);
-    setImage(null);
+    revokeObjectUrl(archive?.url);
+    setImages([]);
     setFrame(null);
     setCrop(null);
     setResultUrl(null);
+    setArchive(null);
     setResultSize(null);
     setResultName("cropped-image.png");
     setRatioId("free");
@@ -425,9 +528,13 @@ export function CropTool() {
   }
 
   function handleRatioChange(nextRatioId: string) {
+    if (isBatch && nextRatioId === "free") {
+      return;
+    }
+
     setRatioId(nextRatioId);
 
-    if (!frame) {
+    if (!frame || isBatch) {
       return;
     }
 
@@ -443,7 +550,7 @@ export function CropTool() {
   }
 
   function beginMove(event: React.PointerEvent<HTMLDivElement>) {
-    if (!crop) {
+    if (!crop || isBatch) {
       return;
     }
 
@@ -458,8 +565,13 @@ export function CropTool() {
     setIsDragging(true);
   }
 
-  function beginResize(handle: ResizeHandle, event: React.PointerEvent<HTMLButtonElement>) {
-    if (!crop) {
+  function beginResize(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!crop || isBatch) {
+      return;
+    }
+
+    const handle = event.currentTarget.dataset.handle as ResizeHandle | undefined;
+    if (!handle) {
       return;
     }
 
@@ -477,7 +589,7 @@ export function CropTool() {
   }
 
   async function confirmCrop() {
-    if (!crop || !frame || !image || !imageRef.current) {
+    if (!image) {
       return;
     }
 
@@ -485,26 +597,51 @@ export function CropTool() {
     setErrorMessage(null);
 
     try {
-      const canvas = document.createElement("canvas");
-      const sourceX = (crop.x / frame.width) * image.naturalWidth;
-      const sourceY = (crop.y / frame.height) * image.naturalHeight;
-      const sourceWidth = (crop.width / frame.width) * image.naturalWidth;
-      const sourceHeight = (crop.height / frame.height) * image.naturalHeight;
+      if (isBatch) {
+        if (!selectedAspect) {
+          throw new Error("Batch crop requires aspect.");
+        }
 
-      canvas.width = Math.round(sourceWidth);
-      canvas.height = Math.round(sourceHeight);
+        const zip = new JSZip();
 
-      const context = canvas.getContext("2d");
-      if (!context) {
-        throw new Error("Canvas unavailable.");
+        for (const item of images) {
+          const sourceCrop = createCenteredAspectCrop(item.naturalWidth, item.naturalHeight, selectedAspect);
+          const { blob } = await cropImageToBlob(item, sourceCrop);
+          zip.file(replaceFileExtension(item.name, "-cropped.png"), blob);
+        }
+
+        const archiveBlob = await zip.generateAsync({ type: "blob" });
+        const nextArchiveUrl = URL.createObjectURL(archiveBlob);
+        revokeObjectUrl(resultUrl);
+        revokeObjectUrl(archive?.url);
+        setResultUrl(null);
+        setResultSize(null);
+        setArchive({
+          url: nextArchiveUrl,
+          name: createArchiveName("cropped-images"),
+          count: images.length,
+        });
+        return;
       }
 
-      context.drawImage(imageRef.current, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-      const blob = await blobFromCanvas(canvas, "image/png");
+      if (!crop || !frame) {
+        return;
+      }
+
+      const sourceCrop = {
+        x: (crop.x / frame.width) * image.naturalWidth,
+        y: (crop.y / frame.height) * image.naturalHeight,
+        width: (crop.width / frame.width) * image.naturalWidth,
+        height: (crop.height / frame.height) * image.naturalHeight,
+      };
+
+      const { blob, width, height } = await cropImageToBlob(image, sourceCrop);
       const nextUrl = URL.createObjectURL(blob);
       revokeObjectUrl(resultUrl);
+      revokeObjectUrl(archive?.url);
+      setArchive(null);
       setResultUrl(nextUrl);
-      setResultSize({ width: canvas.width, height: canvas.height });
+      setResultSize({ width, height });
     } catch {
       setErrorMessage("裁剪失败，请重试。");
     } finally {
@@ -529,10 +666,19 @@ export function CropTool() {
         下载图片
       </button>
     </div>
+  ) : archive ? (
+    <div className={styles.footerStack}>
+      <button type="button" onClick={resetAll} className={styles.secondaryButton}>
+        重新选择
+      </button>
+      <button type="button" onClick={() => downloadUrl(archive.url, archive.name)} className={styles.primaryButton}>
+        下载 zip
+      </button>
+    </div>
   ) : image ? (
     <div className={styles.footerStack}>
       <div className={styles.ratioRow}>
-        {ratioOptions.map((option) => (
+        {visibleRatioOptions.map((option) => (
           <button
             key={option.id}
             type="button"
@@ -543,7 +689,12 @@ export function CropTool() {
           </button>
         ))}
       </div>
-      <ActionButtons onCancel={resetAll} onConfirm={confirmCrop} confirmLabel={isExporting ? "处理中" : "确认"} disabled={isExporting} />
+      <ActionButtons
+        onCancel={resetAll}
+        onConfirm={confirmCrop}
+        confirmLabel={isExporting ? "处理中" : isBatch ? "批量裁剪" : "确认"}
+        disabled={isExporting || (isBatch && !selectedAspect)}
+      />
     </div>
   ) : (
     <button type="button" onClick={resetAll} className={styles.primaryButton}>
@@ -552,25 +703,41 @@ export function CropTool() {
   );
 
   return (
-    <ToolFrame title="裁剪" description="上传图片后即可移动裁剪框、拖动边缘并切换常见比例。" footer={footer} note="裁切">
+    <ToolFrame
+      title="裁剪"
+      description="单张图片支持自由拖动，多张图片会按所选比例自动居中批量裁剪并打包下载。"
+      footer={footer}
+      note="裁切"
+    >
       <div className={styles.panel}>
         <div className={styles.statusRow}>
-          <span>{image ? image.name : "拖入图片或点击上传"}</span>
-          <span>{resultUrl ? "裁剪完成" : image ? "拖动边缘或移动裁剪框" : "支持手机安装使用"}</span>
+          <span>{image ? (isBatch ? `已选择 ${images.length} 张图片` : image.name) : "拖入图片或点击上传"}</span>
+          <span>
+            {resultUrl
+              ? "裁剪完成"
+              : archive
+                ? `已打包 ${archive.count} 张图片`
+                : image
+                  ? isBatch
+                    ? "选择比例后自动居中批量裁剪"
+                    : "拖动边缘或移动裁剪框"
+                  : "支持手机安装使用"}
+          </span>
         </div>
 
         <div ref={stageRef} className={styles.stage}>
-          {!image && (
+          {!image ? (
             <Dropzone
               title="拖入图片开始裁剪"
-              description="上传后可以移动裁剪框，拖动四边和四角调整范围。"
+              description="单张图片可手动裁剪，多张图片会按所选比例自动批量裁剪。"
+              multiple
               onFileSelect={(fileList) => {
                 void handleFileSelect(fileList);
               }}
             />
-          )}
+          ) : null}
 
-          {image && !resultUrl ? (
+          {image && !resultUrl && !archive ? (
             <>
               <Image
                 ref={imageRef}
@@ -583,24 +750,34 @@ export function CropTool() {
                 className={styles.previewImage}
               />
 
-              {crop && frame ? (
+              {displayCrop && frame ? (
                 <div
-                  className={joinClasses(styles.cropBox, isDragging && styles.cropBoxDragging)}
-                  style={{ left: frame.left + crop.x, top: frame.top + crop.y, width: crop.width, height: crop.height }}
-                  onPointerDown={beginMove}
+                  className={joinClasses(styles.cropBox, isDragging && styles.cropBoxDragging, isBatch && styles.cropBoxStatic)}
+                  style={{ left: frame.left + displayCrop.x, top: frame.top + displayCrop.y, width: displayCrop.width, height: displayCrop.height }}
+                  onPointerDown={isBatch ? undefined : beginMove}
                 >
                   <div className={styles.cropOutline} />
                   <div className={styles.cropGlow} />
                   <div className={styles.cropShade} />
-                  {(Object.keys(handleClasses) as ResizeHandle[]).map((handle) => (
-                    <button
-                      key={handle}
-                      type="button"
-                      aria-label={`调整裁剪框 ${handle}`}
-                      onPointerDown={(event) => beginResize(handle, event)}
-                      className={joinClasses(styles.handle, handleClasses[handle])}
-                    />
-                  ))}
+                  {!isBatch
+                    ? (Object.keys(handleClasses) as ResizeHandle[]).map((handle) => (
+                        <button
+                          key={handle}
+                          type="button"
+                          data-handle={handle}
+                          aria-label={`调整裁剪框 ${handle}`}
+                          onPointerDown={beginResize}
+                          className={joinClasses(styles.handle, handleClasses[handle])}
+                        />
+                      ))
+                    : null}
+                </div>
+              ) : null}
+
+              {isBatch ? (
+                <div className={styles.helperCard}>
+                  <p className={styles.helperTitle}>批量模式预览首张图片</p>
+                  <p className={styles.helperDescription}>系统会按所选尺寸比例，对全部图片执行无留白、水平垂直居中的最佳裁剪，并统一打包为 zip。</p>
                 </div>
               ) : null}
             </>
@@ -612,6 +789,16 @@ export function CropTool() {
               <div className={styles.resultMeta}>
                 <p className={styles.resultTitle}>裁剪完成</p>
                 <p className={styles.resultDescription}>结果已生成，可以直接下载，或返回重新选择另一张图片。</p>
+              </div>
+            </div>
+          ) : null}
+
+          {archive ? (
+            <div className={styles.resultWrap}>
+              <div className={styles.archiveBadge}>{archive.count}</div>
+              <div className={styles.resultMeta}>
+                <p className={styles.resultTitle}>批量裁剪完成</p>
+                <p className={styles.resultDescription}>全部图片已按当前比例居中裁切，并打包为一个 zip 文件供下载。</p>
               </div>
             </div>
           ) : null}

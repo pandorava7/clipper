@@ -13,17 +13,17 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#ede4d3",
     icons: [
       {
-        src: "/icon?size=192",
+        src: "/clipper-app-icon-20260522.png",
         sizes: "192x192",
         type: "image/png",
       },
       {
-        src: "/icon?size=512",
+        src: "/clipper-app-icon-20260522.png",
         sizes: "512x512",
         type: "image/png",
       },
       {
-        src: "/apple-icon",
+        src: "/clipper-app-icon-20260522.png",
         sizes: "180x180",
         type: "image/png",
       },

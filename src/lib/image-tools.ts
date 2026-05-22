@@ -38,10 +38,20 @@ export async function loadImageFile(file: File): Promise<LoadedImageFile> {
   }
 }
 
+export async function loadImageFiles(fileList: FileList | File[]) {
+  return Promise.all(Array.from(fileList).map((file) => loadImageFile(file)));
+}
+
 export function revokeObjectUrl(url: string | null | undefined) {
   if (url) {
     URL.revokeObjectURL(url);
   }
+}
+
+export function revokeLoadedImages(images: LoadedImageFile[] | null | undefined) {
+  images?.forEach((image) => {
+    revokeObjectUrl(image.url);
+  });
 }
 
 export async function blobFromCanvas(canvas: HTMLCanvasElement, type: string, quality?: number) {
@@ -64,8 +74,16 @@ export function downloadUrl(url: string, filename: string) {
   link.click();
 }
 
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  downloadUrl(url, filename);
+  window.setTimeout(() => {
+    revokeObjectUrl(url);
+  }, 0);
+}
+
 export function replaceFileExtension(filename: string, extension: string) {
-  return filename.replace(/\.[^.]+$/, "") + extension;
+  return (/\.[^.]+$/.test(filename) ? filename.replace(/\.[^.]+$/, "") : filename) + extension;
 }
 
 export function clamp(value: number, min: number, max: number) {

@@ -16,6 +16,11 @@ export const metadata: Metadata = {
   title: "Clipper",
   description: "A simple installable cropper for quick image trimming on mobile.",
   applicationName: "Clipper",
+  icons: {
+    icon: "/clipper-app-icon-20260522.png",
+    shortcut: "/clipper-app-icon-20260522.png",
+    apple: "/clipper-app-icon-20260522.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",

@@ -8,6 +8,7 @@ type DropzoneProps = {
   title: string;
   description: string;
   accept?: string;
+  multiple?: boolean;
   onFileSelect: (fileList: FileList | null) => void;
 };
 
@@ -15,6 +16,7 @@ export function Dropzone({
   title,
   description,
   accept = "image/*",
+  multiple = false,
   onFileSelect,
 }: DropzoneProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -61,6 +63,7 @@ export function Dropzone({
         ref={inputRef}
         type="file"
         accept={accept}
+        multiple={multiple}
         className={styles.input}
         onChange={(event) => {
           onFileSelect(event.target.files);
