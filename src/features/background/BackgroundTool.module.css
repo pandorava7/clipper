@@ -65,10 +65,21 @@
   gap: 0.4rem;
 }
 
+.archiveBadge,
 .previewTitle,
 .previewDescription,
 .errorText {
   margin: 0;
+}
+
+.archiveBadge {
+  min-width: 4rem;
+  padding: 0.85rem 1rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-soft);
+  font-size: 1.35rem;
+  font-weight: 700;
 }
 
 .previewTitle {
